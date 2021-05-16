@@ -1,0 +1,122 @@
+---
+title: "TimeSeries2021_R_NNAR_Apr27"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+Let's play around with the `forecast` package's `nnetar()` autoregressive neural network function.  First let's read in a somewhat contrived time series.  It has three discrete outputs: -1, 0 and +1.  First we read in the csv file into a data frame.
+```{r}
+df <- read.csv("Data/NNseries.csv")
+class(df)
+```
+Each column of a data frame is a **vector**.  In R, there are two kinds of vectors: **atomic vectors** and **lists**.  An **atomic vector** is a vector where all the elements are of the same type, whereas a **list** allows its elements to be of different types -- even other lists!  Our column is an atomic vector, since it consists only of integers.  An atomic vector can be treated as a time series.
+```{r}
+ts <- df$"X.1"
+is.atomic(ts)
+```
+Let's plot our time series.
+```{r}
+plot(ts)
+```
+
+Let's instead do a plot where we show both the little circles and lines connecting them.
+```{r}
+plot(ts, type="o")
+```
+
+Those little circles are hard to read when close together, so let's change them to little solid dots.
+```{r}
+plot(ts, type="o", pch=20)
+```
+
+That is much better.  Looking at this series, it is hard to detect a pattern, but since the mean and variance look relatively stable, it seems to be stationary.  Before trying to fit a model to this time series, let's check its variance.
+```{r}
+var(ts)
+```
+Let's fit an ARIMA model and see how much of the variance is explained.
+```{r}
+library(forecast)
+arimafit <- auto.arima(ts)
+arimafit
+```
+Since the `sigma^2` is still 0.5053 (vs 0.6990 variance), we have not explained much of the variance.  We can see this by plotting the actual data versus the one-step ahead forecasts (in red).
+```{r}
+plot(ts, type="o", pch=20)
+lines(arimafit$fitted, type="p", pch=20, col="red")
+```
+Let's instead try to fit an autoregressive neural network model to this timeseries, using the `nnetar()` function.
+```{r}
+nnfit <- nnetar(ts)
+nnfit
+```
+Since the `sigma^2` is only 0.241, we have described much more of the variance than the ARIMA model.  How does this `nnetar()` model work?  The description `NNAR(6,4)` means that it takes the **6** previous time lagged values as inputs to one hidden layer consisting of **4** nodes, which in turn feed into an output node.  The hidden layer uses sigmoid functions for activation, and the output node uses the identity function (i.e. just a linear weighted combination of the inputs).
+
+The hidden layer is **dense**, i.e. each of the four nodes receives weighted inputs from each of the six lagged values of the series plus a constant term (called the **bias**), so we get $4 \times (6+1) = 28$ weights.  There also four more weights plus a bias term feeding into the output node, for a total of $28 + 4 + 1 = 33$ weights.
+
+The weights are found by numerical optimization, but the optimization output does depend on the initial values.  This introduces an element of randomness.  The `nnetar()` function runs a number of iterations with different initial values; the default number of times to iterate this is **20**.
+
+This randomness means that if we run the `nnetar()` function again, we may get slightly different results.
+```{r}
+nnfit <- nnetar(ts)
+nnfit
+```
+Notice that when we ran `nnetar()` a second time, the resulting `sigma^2` is slightly higher at 0.2475. And if you run this notebook again, you will likely get somewhat different values.
+
+Let's plot the time series and the one-step ahead forecasts from the fitted series.
+```{r}
+plot(ts, type="o", pch=20)
+lines(nnfit$fitted, type="p", pch=20, col="red")
+```
+
+This looks interesting:  Some of the values are quite closely predicted, but many are not.
+
+Here is a bit of inside information:  The values of this series only depend on the previous *three* values.  Therefore we will set `p` equal to 3 when running `nnetar()`.
+```{r}
+nnfit <- nnetar(ts, p=3) # p = lags (t-1 to t-3)
+nnfit
+```
+I can also increase the number of nodes in the single layer using the `size` parameter and see if we can explain more of the variance (at the expense of possibly overfitting the model).
+```{r}
+nnfit <- nnetar(ts, p=3, size=7) # size = # of nodes in the hidden layer
+nnfit
+```
+Our fit did not improve by adding more than seven nodes in the hidden layer.  Let's now plot our new predictions versus the original series.
+```{r}
+plot(ts, type="o", pch=20)
+lines(nnfit$fitted, type="p", pch=20, col="red")
+```
+
+This is starting to look better.  Let's see if we get any improvement by increasing the number of iterations over which we are averaging, using the `repeats` parameter.
+```{r}
+nnfit <- nnetar(ts, p=3, size=7, repeats=1000)
+nnfit
+```
+```{r}
+plot(ts, type="o", pch=20)
+lines(nnfit$fitted, type="p", pch=20, col="red")
+```
+
+Increasing the number of iterations did not appear to improve our fit at all.
+
+If we want to more closely inspect our data versus the model fitted values, we can put both the original and the fitted series into a data frame, and then use teh `View` command to inspect it.
+```{r}
+mydf <- data.frame(ts, round(nnfit$fitted, digits=2))
+View(mydf)
+```
+
+Looking at the data and the fitted values, we notice that we exactly predict the values at times 4, 5, 9, 10, 14, 15, 18, 19, 21, 22, 25, 26, 31, 32, 36, 37, 40, 41, 46, 47, 50, 51, 55, 56, 63, 64, 70, 71, 76, 77, 80, 81, 85, 86, 90, 91, 96, 97, 100, 101, 104, 105, 110, 111, 117, 118, 121, 122, 127, 128, 132, 133, 137, 138, 141, 142, 146, 147.  These times always appear as consecutive pairs, e.g. 14 and 15, but the separation between pairs appears variable.
+
+What is going on here, and what is the pattern that the neural network detects, but which may not be visible to the naked eye?
+
+Here is how the series was constructed:  There are "runs" of -1's of variable length, followed by three values that are either 0 or 1, followed again by runs of -1 of variable length.  Furthermore, or those three 0's or 1's, the first two are random, but the third value of the XOR of the previous two.  For example,
+-1, -1, -1, -1, 1, 1, 0, -1, -1, -1, -1, -1, -1, -1, 0, 1, 1, -1, -1, -1, ...
+Neural networks are well-suited for this kind of time series which is a mix of deterministic and random values.  Moreover, the hidden layer allows for interactions between input values; such interactions are needed to produce the output of an XOR function.
+
+However, this time series is quite contrived, and we are not likely to encounter anything like it in real life.  So when might the `nnetar()` function be useful?  It might be useful when predicting **cyclic time series**.  A cyclic time series is like a seasonal time series, except that its periods are **not** of fixed length.  Examples might include:  sunspots, political and business cycles, animal populations, and disease epidemics.  But **be warned**: neural network models, when applied to individual time series, can produce plausible-*looking* forecasts but not necessarily *accurate* forecasts.  For an example, see the other notebook which applies the `nnetar()` model to SARS-CoV-2.
+
+
+
+
+
+

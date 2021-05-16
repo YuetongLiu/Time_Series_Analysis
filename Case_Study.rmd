@@ -1,0 +1,194 @@
+---
+title: "SARS-CoV-2"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+From the excellent website https://91-divoc.com, we downloaded a time series of U.S. daily counts of SARS-CoV-2 positive tests.
+```{r}
+df <- read.csv('91-DIVOC-countries.csv')
+View(df)
+```
+Unfortunately, the format of the file has all the data entries enumerated across a row rather than down a column.  Based on a question asked on Stack Overflow, Dr. Jonathan Carroll wrote a useful function called `read.tcsv()` which will read and transpose a CSV file for us.
+```{r}
+## https://gist.github.com/jonocarroll/b17ce021b0637a31f584ed08a1fbe733#file-read-tscv-r
+## Based on https://stackoverflow.com/a/17289991/4168169
+read.tcsv = function(file, header=TRUE, sep=",", ...) {
+  n = max(count.fields(file, sep=sep), na.rm=TRUE)
+  x = readLines(file)
+  .splitvar = function(x, sep, n) {
+    var = unlist(strsplit(x, split=sep))
+    length(var) = n
+    return(var)
+  }
+    x = do.call(cbind, lapply(x, .splitvar, sep=sep, n=n))
+  x = apply(x, 1, paste, collapse=sep) 
+  ## empty strings are converted to NA
+  out = read.csv(text=x, sep=sep, header=header, na.strings = "", ...)
+  return(out)
+}
+```
+We can use this function to read in our file.
+```{r}
+df <- read.tcsv('91-DIVOC-countries.csv')
+head(df)
+```
+Let's pass parameters to this function to specify our own column names and also to convert the dates from string type to date type.
+```{r}
+df <- read.tcsv('91-DIVOC-countries.csv', col.names=c("Date","Cases"),
+                colClasses=c("Date","integer"))
+head(df)
+```
+Let's create a `ts` time series from this data frame.  For the time being, we will ignore the actual dates.
+```{r}
+ts <- ts(df$Cases)
+plot(ts)
+```
+
+There is a function called `autoplot()` (originally developed in the `ggplot2` package) which is a prettier version of the `plot()` function.  We'll use the `forecast` package's verion of `autoplot()`.
+```{r}
+library(forecast)
+autoplot(ts)
+```
+
+Let's also plot the logarithmic transformation of our data, since we seem to have periods of exponential growth and decay.  Also a log transform appears to stabilize the variance.
+```{r}
+logts = log(ts)
+autoplot(logts)
+```
+
+There seems to be a structural break in this data after the first 28 days, due to the initial rapid exponential growth in cases.  To model the subsequent case data more accurately, it probably makes sense just to toss our those first 28 days.
+```{r}
+ts <- ts(df$Cases[-1:-28])
+logts = log(ts)
+autoplot(logts)
+```
+
+We notice that there is a weekly periodicity to the data, due to day-of-week effects in the testing reporting process.  To model this seasonality, we should create our `ts` time series with a frequency of 7 days.  Then we can use the `decompose()` function to separate the level/trend, seasonality and noise.
+```{r}
+ts <- ts(df$Cases[-1:-28], frequency=7)
+logts = log(ts)
+decomposeTemps <- decompose(logts)
+plot(decomposeTemps)
+```
+
+Let's try fitting a SARIMA model to this data.  What does `auto.arima()` suggest?
+```{r}
+logts_arima <- auto.arima(logts)
+logts_arima
+```
+So the time series was modeled as non-stationary, for which both a usual difference ($d=1$) and also a seasonal difference ($D=1$) were taken, plus several autoregressive and moving average terms.  We can plot our data versus the fitted model's one-step ahead forecast.
+```{r}
+plot(logts)
+lines(logts_arima$fitted, col="red")
+```
+
+The `forecast` package also makes it convenient for us to plot many-steps ahead forecasts.  For example, we can plot the forecast for the next 60 days, plus both 80% and 95% confidence intervals.
+```{r}
+autoplot(forecast(logts_arima, h=60))
+```
+
+Notice that this model makes a forecast of a linear trend (plus day-of-week effects), but the width of the confidence intervals are increasing rapidly.
+
+We can also fit an exponential smoothing model to this data,  The `forecast` package's `ets()` function selects a best fitting model among many possible exponential smoothing models.
+```{r}
+logts_ets <- ets(logts)
+logts_ets
+
+```
+The model `ETS(M,Ad,A)` means multiplicative error, additive damped trend, and additive seasonality.  Let's examine the 60-day ahead forecast and confidence intervals.
+```{r}
+autoplot(forecast(logts_ets, h=60))
+```
+
+Notice that our forecast trend is no longer linear but rather damped.
+
+Finally, let's look at the forecast arising from the `nnetar()` function's autoregressive neural network model.
+```{r}
+logts_nnet <- nnetar(logts)
+logts_nnet
+# NNAR(15,1,8)[7] means looks at lags 1,...,15
+# and lag 7 (from seasonality - but no effect here)
+# and has 8 nodes in the hidden layer.
+```
+The model `NNAR(15,1,8)[7]` means that we are looking at inputs at $t-1$, $t-2$, ..., $t-15$ but also we look at one seasonal lag, i.e. $t-7$, but this is redundant so does affect the model.  There are 8 nodes in the hidden layer.  Let's check the 60-day ahead forecast.
+```{r}
+autoplot(forecast(logts_nnet, h=60))
+```
+
+There seems to be some long-term cyclicality in the case data arising from several pandemic "waves".  To try to capture this, we can tell the neural net model to look backwards over many weeks (but at the expense of possibly overfitting the model).
+```{r}
+logts_nnet <- nnetar(logts, P=10) # Try P=10 (weeks)
+logts_nnet
+```
+```{r}
+autoplot(forecast(logts_nnet, h=60))
+```
+
+The neural network model predicts an upturn in the cases.  Let's look at a longer-term forecast.
+```{r}
+autoplot(forecast(logts_nnet, h=300))
+```
+
+This is interesting.  The neural net model sees the most recent cycle of cases and predicts that it will continue to be repeated.  The neural network models really are excellent at findind nonlinear patterns in the data, but this is at the expense of overfitting:  Does observing one or two cycles really provide good evidence that those cycles will continue to be repeated?  Perhaps rather than for *forecasting*, these neural network models are better at suggesting possible interesting *scenarios*, i.e. possible future outcomes, based on analyzing patterns in past data.
+
+How do we deal with daily time series more elegantly than with `ts`?  A library called `zoo` can help us.  The "oo" in `zoo` stands for "ordered observations".  We need to pass an ordered index, usually time, to `zoo()` to create a `zoo` object.  The `zoo()` function can also handle converting the date strings to actual dates.
+```{r}
+library(zoo)
+zoo <- zoo(df$Cases, order.by=df$Date)
+autoplot(zoo)
+```
+
+The `zoo` package is also useful for dealing with unevenly space time series such intraday stock trades.
+```{r}
+tick_df <- read.csv('TeslaTickData.csv', col.names=c("Time","Price","Volume"))
+head(tick_df)
+```
+
+```{r error=TRUE}
+tick_zoo = zoo(tick_df$Price, order.by=tick_df$Time)
+```
+We received a warning that our time entries were not unique; e.g. we have several trades happening in the 1 second interval at 12:28:43.  This will sometime cause us problems, such as when trying to use the `plot()` command.
+```{r error=TRUE}
+plot(tick_zoo)
+```
+Instead, we can use a package called `xts`, which stands for "eXtensible Time Series".  
+```{r}
+library(xts)
+```
+However, when reading in time series, we get an error if we just pass the times as strings.
+```{r error=TRUE}
+tick_xts = xts(tick_df$Price, order.by=tick_df$Time)
+```
+Instead, we need to convert those strings into "official" R time, called POSIXct (number of seconds since January 1, 1970 -- who knew I was born before the beginning of time?).  The standard format is "%Y-%m-%d %H:%M:%S", but our file only has times, so we need to specify the format.  Also, to suppress a problem that `xts` plots have with multiple outputs, I assign the plot function outputs to a variable before displaying.
+```{r}
+tick_xts = xts(tick_df$Price, order.by=as.POSIXct(tick_df$Time, format="%H:%M:%S"))
+pp <- plot(tick_xts)
+pp <- lines(tick_xts, type="p", pch=20, col="red")
+pp
+```
+
+However, this defaults to use the current date when run.  To fix this, I can paste an explicit date (April 26, 2021) in front of the times (which also puts it into standard format).
+```{r}
+tick_xts = xts(tick_df$Price, order.by=as.POSIXct(paste("2021-04-26", tick_df$Time, sep=" ")))
+pp <- plot(tick_xts)
+pp <- lines(tick_xts, type="p", pch=20, col="red")
+pp
+```
+
+This is all I have to say about R in this course.  We have only scratched the surface, and I encourage you to delve deeper into the language.  I encourage you to learn the "Tidyverse" group of packages, including the new ones made for time series.  See https://www.tidyverse.org/ and https://tidyverts.org/ and https://tidyverts.github.io/tidy-forecasting-principles/.
+
+Also, Professor Rob Hyndman's online materials such as https://otexts.com/fpp2/ and the new "tidy" version https://otexts.com/fpp3/ are excellent resources for practical time series analysis.  He wrote the `forecast` package and his examples are all written in R.
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,547 @@
+---
+title: "Analysis of US monthly average temperatures"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+### Getting data from URL's.
+
+Let's get NOAA's data on the monthly average temperature of the contiguous United States.  We can use the `read.csv` command to read from URL's as well as local files.
+```{r}
+tempData <- read.csv(
+"https://www.ncdc.noaa.gov/cag/national/time-series/110-tavg-all-1-1895-2020.csv?base_prd=true&begbaseyear=1901&endbaseyear=2000")
+```
+We should get back a data frame.  Let's inspect the first few rows.
+```{r}
+head(tempData)
+```
+It looks like the first four rows were file header information that we should skip over, which we can do using the `skip` parameter of `read.csv`. 
+```{r}
+tempData <- read.csv(
+"https://www.ncdc.noaa.gov/cag/national/time-series/110-tavg-all-1-1895-2020.csv?base_prd=true&begbaseyear=1901&endbaseyear=2000",
+skip=4)
+head(tempData)
+```
+```{r}
+tail(tempData)
+```
+
+### Time series `ts` object in R
+
+Previously when we created a "time series" in R, we actually just created a vector indexed by integers.  But we would prefer to have a time series with indexed by actual times.  The basic time series object is called `ts`.  It contains a start and end time as well as a frequency.  It is useful for regularly spaced time intervals such as monthly, quarterly or annual data.  Howver, for irregularly spaced data (such as daily stock quotes), it is necessary to use additional packages such as `zoo` or `xts`.
+
+```{r} 
+# P1
+temp_ts <- ts(tempData$Value, start=c(1895,1), freq=12)
+# Recall that c(1895,1) specfies a tuple or vector of numbers,
+# in this case year and period of year (month or quarter).
+print(temp_ts)
+```
+Now let's try plotting this `ts` object.
+```{r}
+plot(temp_ts)
+```
+
+This is a bit hard to read.  Let's zoom in on a recent time period using the `window` function.
+```{r}
+# from Jan 2000
+a = window(temp_ts, start=c(2000, 1))
+plot(a)
+a
+```
+
+As you might expect, we see clear ***seasonality*** in the monthly temperature data.  What about long term trend?  It is hard to determine without ***filtering*** out the seasonal fluctuations.  How might we do that?  There are many approaches, but the simplest is to average over the 12 months to get an average annual temperature.  The fancy word for this is "***downsampling***".  The `ts` object does not downsampling built in (although some other time series classes do), but we can do it manually.
+
+```{r}
+tail(temp_ts)
+```
+
+
+Since we don't have all 12 months of year 2020 data yet, let's create a new series dropping the last year.
+```{r}
+ex2020 <- window(temp_ts, end=c(2019,12))
+```
+We can also use the `window` function to get all the January temperatures by starting in Jan 1895 and then sampling just once a year thereafter.
+```{r}
+# P2
+JanTemps <- window(ex2020, start=c(1895,1), freq=1)
+JanTemps
+```
+We can now plot the January temperatures, which will at least give us a long term trend for a particular month.
+```{r}
+plot(JanTemps)
+```
+
+There is a lot of noise in this series, but is there a trend, or a level shift higher in the last 30 years?  It is hard to judge just by looking at this.
+
+Let's make a June series too and see if the summers are getting hotter!
+```{r}
+JunTemps <- window(ex2020, start=c(1895,6), freq=1)
+plot(JunTemps)
+```
+
+Again we have a lot of noise and it is difficult to spot a long-term trend over 100 years, but there does seem to be an upward trend over the last 40 years.
+
+Let's try to take an average of Jan and Jun series.
+```{r error=TRUE}
+(JanTemps + JunTemps)/2
+```
+We get a confusingly described error, and in any event we are trying to add two `ts` objects that have different start and end dates.  Let's instead convert to the raw numeric values that the time series contain.
+```{r}
+(as.numeric(JanTemps) + as.numeric(JunTemps))/2
+```
+Let's compute the average for all 12 months using an R `for` loop.
+```{r}
+sumVector = as.numeric(window(ex2020, start=c(1895,1), freq=1))
+for (i in 2:12) {
+  sumVector = sumVector + as.numeric(window(ex2020, start=c(1895,i), freq=1))
+}
+avgVector = sumVector/12
+plot(avgVector, type="l")
+```
+
+Averaging over all 12 months has allowed us to see a rising temperature trend over the last 50 years.  But we have lost the year as an index.  Let's create a new annual `ts` object to hold this average data.
+```{r}
+tsAvg = ts(avgVector, start=1895, frequency=1)
+plot(tsAvg)
+```
+
+Before we return to the monthly data to consider other ways to treat seasonal data, let's consider further the downsampled annual average data.  Certainly the annual temperatures do not appear i.i.d., but is this data nevertheless stationary or in fact non-stationary?
+
+This is an important question!  If stationary, then in the long term temperatures would fluctuate around a long-term mean.
+
+And if non-stationary, will it become stationary by removing a deterministic trend or will it become stationary by taking differences?  These two kinds of time series are called ***trend stationary*** and ***difference stationary*** respectively.  Let's discuss them in more detail.
+
+### Trend stationary time series
+A ***trend stationary*** time series process is of the form
+$$Y_t = m_t + X_t$$
+where $m_t$ is a deterministic function of time, representing a ***deterministic global trend***, and $X_t$ is a stationary time series with mean 0. Then our mean function $\mu_t = \mathbb{E}[Y_t]$ is just given by the deterministic function $m_t$, and importantly our **variance is constant** since $X_t$ is stationary.
+
+**Beware!** Global trend models are often unrealistic!  Trends do not go on forever, so *long term* forecasts from these global trend models often can **not** be relied upon.  In fact, no matter the time series model, long term forecasting is fraught with all kinds of uncertainty:
+
+* Randomness arising from the random variables themselves.
+* Estimation errors arising from the estimation of the parameters.
+* Misspecification errors arising from choosing the wrong kind of model.
+* Inherent uncertainty arising from unforeseen changes in the future.  This leads to nonstationarity which is hard to model with any accuracy.  This kind of uncertainty is sometimes referred to ***Knightian uncertainty***, examples of which are so-called ***black swan events***.
+
+**Example**.  The simplest example of a trend stationary time series is the  ***linear trend plus noise*** model
+$$Y_t = m_t + \epsilon_t,$$
+where
+$$m_t = \alpha + \beta t$$
+is a ***global linear trend*** and $\epsilon_t$ is white noise.
+
+### Difference stationary time series
+A ***difference stationary*** time series process $Y_t$ where if we difference one or more times we get a stationary process $X_t$, i..e
+$$\nabla^d Y_t = (1-B)^d Y_t = X_t.$$
+For example, ARIMA($p,d,q$) models are difference stationary.
+
+In practice most difference stationary models require only first order differences, so that
+$$Y_t = Y_{t-1} + X_t$$
+where $X_t$ is a stationary.  Most economic and financial time series tend to be difference stationary rather than trend stationary (see Chatfield & Xing pg. 100-101 for further discussion), and difference stationary models tend to do a better job at forecasting out of sample.
+
+**Example**.  The simplest example of a difference stationary time series is the ***random walk model***
+$$Y_t = Y_{t-1} + \epsilon_t$$
+where $\epsilon_t$ is white noise.
+
+**Important!** Unlike the trend stationary model (which has **constant** variance), a **difference stationary model will have increasing variance over time**.  For example, assuming a random walk $Y_t$ starts at time zero, the random walk process has an increasing variance
+$$\operatorname{Var}(Y_t) = t \sigma_\epsilon^2,$$
+where $\sigma_\epsilon^2$ is the variance of the white noise.
+
+Trying to determine whether our temperature time series is stationary, trend stationary, difference stationary, or some other kind of nonstationary will greatly affect any long term forecasts we try to make, as well as the confidence intervals of those forecasts.
+
+How to start to address this question?  Let's think intuitively about the difference between a *linear trend plus noise model* and a *random walk model*.  It might be helpful here to ***simulate*** and plot both these and compare their plots.
+
+### Simulating time series
+Normally distributed white noise is called ***Gaussian white noie***.  To simulate Gaussian white noise, we'll use the `rnorm` function which returns samples from a normal distribution, with default mean 0 and default variance 1.
+```{r}
+# P3
+set.seed(1)  # Set a specific seed so we all see the same thing.
+noise = rnorm(100)
+plot(noise, type="l")
+```
+
+This is a typical picture of white noise.  Now let's use this white noise to generate simulations of linear trend a ***linear trend plus noise***,
+$$Y_t = 0.1t + \epsilon_t.$$
+```{r}
+linearTrend = (1:100)*0.1 + noise  #
+plot(linearTrend, type="l")
+```
+
+Now compare this to a ***random walk with drift***
+$$Y_t = Y_{t-1} + 0.1 + \epsilon_t.$$
+We can use the `cumsum` function to simulate this.
+```{r}
+randomWalkWithDrift = cumsum(0.1 + noise)
+plot(randomWalkWithDrift, type="l")
+```
+
+How to distinguish these two models just by looking at their samples?  These two plots look similar because they have upward trends that appear rougly linear.  And although we know that the random walk has increasing variance as time increase, **we can not see that by just looking at one sample**!
+
+Now look more closely.  In the first plot of the trend + noise model, relatively larger values are immediately followed by relatively smaller values and vice-versa; it is a mean reversion property.  On the other hand, in the random walk model neighboring seem fairly close to neighboring values, without any such mean reverting property.
+
+This is the idea behind a ***unit root test*** for stationarity called the ***Dickey-Fuller test***.
+
+### Unit root tests
+
+First of all, why do we call it a ***unit root test***?  Suppose we can write our process as:
+$$\phi(B) X_t = \theta(B) \epsilon_t,$$
+where $\phi(B)$ and $\theta(B)$ are polynomials of the backshift operator $B$.  For example, if $\phi(B) = 1$ then we have a pure MA process, which is always stationary.  On the other hand, if $\phi(B) \neq 1$, we have several possibilities.  If all roots of $\phi$ lie outside of the unit circle, then we have a stationary AR process.  If any roots lie on (or inside) the unit circle, then we have a process that is nonstationary, for example ARIMA($p,d,q$) processes with $d \geq 1$.
+
+When root is on the unit circle, the case we most commonly consider is when the root is 1, which we call a ***unit root***.  ARIMA($p,d,q$) models with $d \geq 1$ have unit roots with multiplicity $d$.
+
+A ***unit root test*** tries to determine whether of not the polynomial $\phi(B)$ has a unit root.  Since many economic and financial time series seem to have unit roots, often the ***null hypothesis*** is that a unit root is present, and the unit root test assesses whether the observed data is consistent with a unit root, and rejects the null hypothesis if the data is sufficiently inconsistent.
+
+For example, suppose we are assuming that our data is modeled by an AR(1) process
+$$X_t = \alpha X_{t-1} + \epsilon_t,$$
+where $\epsilon_t$ is Gaussian noise.  Then we have a unit root if $\alpha = 1$. Let $\alpha = 1$ be our null hypothesis, and assess it against an ***alternative hypothesis*** that $|\alpha| < 1$.
+
+A natural approach would be to fit an AR(1) model using R's `arima` function and check the value of $\alpha$ as well as its reported standard error based on maximum likelihood estimators.  However, the theory behind requires the process be stationary, but our null hypothesis is nonstationary!
+
+Let's instead consider the ***least squares estimator*** of $\alpha$:
+$$\hat{\alpha} = \frac{\sum_{t=1}
+^n X_t X_{t-1}}{\sum_{t=1}^n X_{t-1}^2},$$
+where $n$ is the sample size, and $X_0$ is the initial value of the series.  The standard error of the estimate of $\alpha$ is
+$$\operatorname{SE}(\hat{\alpha}) \approx \sqrt{ \frac{\frac{1}{n-1} \sum_{t=1}^n (X_t - \hat{\alpha}X_{t-1})^2}{\sum_{t=1}^n X_{t-1}^2}  )} = \sqrt{ \frac{\frac{1}{n-1} (\sum_{t=1}^n X_t^2 - \hat{\alpha}^2 \sum_{t=1}^n X_{t-1}^2)}{\sum_{t=1}^n X_{t-1}^2} }$$
+Then the ***Dickey-Fuller $t$-ratio test statistic (DF)*** is
+$$\operatorname{DF} = \frac{\hat{\alpha} -1}{\operatorname{SE}(\hat{\alpha})}.$$
+**Under the null hypothesis assumption that $\alpha = 1$**, i.e. there is a unit root, it can be shown this $t$-ratio test statistic has a ***limiting distribution*** as $n \to \infty$,
+$$\frac{\hat{\alpha} -1}{\operatorname{SE}(\hat{\alpha})} \xrightarrow{d} \frac{\frac12 (\chi_1^2 - 1)}{\sqrt{\int_0^1 W^2(t) \, dt}},$$
+where $\chi_1^2$ is the ***chi-squared distribution*** with one degree of freedom, and $W(t)$ is standard Brownian motion.  We can't calculate this distribution of this test statistic in closed form, but it can be calculated numerically.
+
+Let's write a function in R to calculate this Dickey-Fuller test statistic.
+```{r}
+# P4
+# input x is a vector
+DFfunction <- function(x) {
+X <- x[-1]          # drop first element
+BX <- x[-length(x)] # drop last element (lagged series)
+N <- length(X)
+alpha <- sum(X*BX)/sum(BX^2)
+SSE <- sum(X^2) - alpha^2 * sum(BX^2) # sum of square errors
+MSE <- SSE / (N-1)  # mean square error
+SEalpha = sqrt(MSE / sum(BX^2))  # standard error of alpha
+DF = (alpha - 1) / SEalpha  # Dickey-Fuller t-ratio test function
+return(DF)
+}
+```
+
+Let's try out our test manually on two series:  the `noise` series and a random walk series without drift.
+```{r}
+randomWalkNoDrift = cumsum(noise)
+plot(randomWalkNoDrift, type="l")
+```
+
+Note that even though the process that generated with random walk has **no drift**, the simulated random walk **appears to have drift**.  But that is due to just random variation; don't be fooled by randomness!
+
+Now let's calculate DF for our Gaussian noise series.
+```{r}
+DFfunction(noise) # reject
+```
+This is well below our 99% critical value of -2.588 to reject the null hypothesis (see http://www.real-statistics.com/statistics-tables/augmented-dickey-fuller-table/, Model 0).  So we conclude that our noise series does **not** have a unit root, as we expected.
+
+Now let's try this out on our random walk (with no drift).
+```{r}
+DFfunction(randomWalkNoDrift) # not reject
+```
+This is well above the 90% critical value -1.614, so as expected we can **not** reject the unit root null hypothesis even at a 90% confidence level.
+
+### Linear regression in R
+If you are not in the mood to write your own formulas for linear regression coefficients and their standard errors, we can use R's `lm` linear model function to do this.  We will regress $X_t$ versus $X_{t-1}$.
+```{r}
+# P5
+fit <- lm(formula = noise[-1] ~ noise[-length(noise)])
+summary(fit)
+```
+**But** this is not quite right!  Here we want to do regression forcing a zero intercept.  So we modify our syntax for the `formula` parameter by including a `0 + `.
+```{r}
+# no intercept
+fit <- lm(formula = noise[-1] ~ 0 + noise[-length(noise)])
+summary(fit)
+```
+So the estimate for $\alpha$ is 0.1269 and the standard error of that estimate is 0.10090 (identical to our own calculation).  Ignore that `t value` of 0.126 because we need to calculate our own DF $t$-value for the null hypothesis that $\alpha=1$:
+```{r}
+(0.01269-1)/0.10090
+```
+This matches our earlier calculation.  We can slightly adjust our linear regression to make this a bit easier, so that we can read the DF statistic directly from the outputted t-value of the regression.
+```{r}
+fit <- lm(formula = diff(noise) ~ 0 + noise[-length(noise)])
+summary(fit)
+```
+
+### What is trending?
+So far our Dickey-Fuller test assumed series with no drift or trend.  But what happens if we do have a drift or trend?  For example, how can we distinguish between a linear trend plus noise series and a random walk with drift?
+
+Here our model setup is as follows:
+$$X_t = a + bt + \alpha X_{t-1} + \epsilon_t$$
+where $\epsilon_t$ is Gaussian white noise.
+
+The **null hypothesis $H_0$** is that $\alpha = 1$.  The **alternative hypothesis $H_1$** is that $|\alpha| < 1$, i.e. it is a linear trend plus stationary AR(1) process.  So we need to do our regression including the intercept $a$ and a time term $bt$.
+
+Let's try this with our **random walk with drift** model.
+```{r}
+timeterm <- 1:99
+fit <- lm(formula = diff(randomWalkWithDrift) ~ timeterm + randomWalkWithDrift[-length(randomWalkWithDrift)])
+summary(fit)
+```
+So our DF $t$-ratio test statistic is -3.187.
+Let's compare this to the critical values of "Model 2" given by http://www.real-statistics.com/statistics-tables/augmented-dickey-fuller-table/.  The 90% critical value is -3.153 and the 95% critical value is -3.452.  So we could (**incorrectly**) reject the null hypothesis of unit root at the 90% confidence level, but would **not** reject at the 95% level.
+
+Let's also apply this test to the **linear trend plus noise** model.
+```{r}
+timeterm <- 1:99
+fit <- lm(formula = diff(linearTrend) ~ timeterm + linearTrend[-length(linearTrend)])
+summary(fit)
+```
+So our DF $t$-ratio test statistic is -9.852, so we would reject the null hypothesis of a unit root with 99% confidence.
+
+### Is our temperature series a random walk?  Does it have a trend?
+Let's consider the plot of our temperature again.
+```{r}
+
+plot(tsAvg)
+```
+
+Before going any further, we should consider the ACF and PACF plots ot the time series.
+```{r}
+acf(tsAvg, main="")
+```
+
+The actual values for the first few lags are
+```{r}
+acf(tsAvg, plot=FALSE)$acf[2:6]
+```
+Let's also look at the partial autocorrelation function.
+```{r}
+acf(tsAvg, type="partial", main="")
+```
+
+Since the lag-1 correlation coefficient is 0.48, we seem to be far enough away that we can reject a unit root.  But let's do our Dickey-Fuller test to double check.  First we'll run a regression with linear trends plus the AR(1) model.
+```{r}
+# P6
+timeterm <- 1:(length(tsAvg)-1) # lag 1
+fit <- lm(formula = diff(tsAvg) ~ timeterm + tsAvg[-length(tsAvg)])
+summary(fit)
+```
+Our DF test statistic is -8.346, so we can reject unit root nonstationarity at the 99% confidence level, **assuming that we have not misspecfied our model**; it may be that another model is appropriate, which might have a unit root.
+
+There also appears to be a linear trend with $b=0.010525$, which is small but seems statistically significant.  So our model is approximately
+$$X_t = 37 + 0.01t + 0.27 X_{t-1} + \epsilon_t.$$
+**Caution!** This does not translate into a linear trend of 0.01 degree per year.  It is larger!  It actually is $0.01 / (1-0.27) \approx 0.014$ degrees per year (Why?  Think!)
+
+How else can we fit a model that has a linear trend plus AR(1) term?  R's `arima` function does not have the ability to include a linear trend when fitting ARIMA models, but the ***forecast*** package has a function called `Arima` that can include a linear term.
+
+First we need to install the ***forecast*** package from the ***Comprehensive R Archive Network (CRAN)***.
+```{r}
+#install.packages('forecast', dependencies = TRUE)
+```
+We only need to install packages the very first time we use `forecast`.  But we still need to load the forecast library into this R session.
+```{r}
+library(forecast)
+```
+
+Now let's try to fit an AR(1) model plus linear trend to our temperature data.
+```{r}
+Arima(tsAvg, order=c(1,0,0), include.drift=TRUE)
+```
+This fitting (which uses maximum likelihood) is quite close to our earlier linear regression (which fits using least squares).  Note that the `intercept` and `drift` outputs of `Arima` correspond to the actual unconditional mean of the stationary series and the actual annual drift, i.e. if $X_t$ is our temperature series, then
+$$X_t - 51.2587 - 0.0151t$$
+is the series that is stationary AR(1) with mean 0.  See https://robjhyndman.com/hyndsight/arimaconstants/ for more details.
+
+**Remark**.  We can **not** necessarily conclude that there is a global deterministic linear trend.  The best we can say is that it is not inconsistent with the data.  We should always be cautious about making long term forecasts.  For example, it may be that there is a slowly varying stochastic trend rather than a deterministic linear one; we have not yet ruled out that possibility.
+
+### But is our trend stochastic?
+Suppose instead that we model our process by
+$$X_t = m_t + \epsilon_t,$$
+but where $m_t$ is random rather than deterministic, governed by
+$$m_t = m_{t-1} + \eta_t.$$
+It turns out (as we will show later) that such a ***random walk plus noise*** model (also called a ***local level model***) is equivalent to ARIMA(0,1,1) model.  The goodness of fit for such a model is roughly the same as that of our linear trend plus AR(1) model, but with less parameters, so it has a better AIC.
+```{r}
+arima(tsAvg, order=c(0,1,1))
+```
+Wait?  What?  Didn't we use the Dickey-Fuller test to essentially rule out the possibility of a unit root?
+
+Not exactly.  We ruled out a random walk with drift,
+$$X_t = a + X_{t-1} + \epsilon_t,$$
+but did not rule an ARIMA(0,1,1) model:
+$$X_t = a + X_{t-1} + \epsilon_t + \beta \epsilon_{t-1}.$$
+For such more complicated time series models, we often turn to the ***augmented Dickey-Fuller test (ADF)***, which accounts for higher lag correlations.  A good library for the ADF test is the *tseries* library for time series and computational finance.
+
+```{r}
+# P7
+library(tseries)
+```
+
+Let's first do the usual Dickey-Fuller test (i.e. the ADF test with zero additional lags), using the `tseries` function `adf.test`, which automatically includes a linear trend.  The parameter `k` can be used to specify the number of lags used.
+```{r}
+adf.test(tsAvg, k=0)  # k is the number of lags.
+```
+The DF test statisitc is -8.346, matching our earlier calculation, and with 99% confidence we can reject a random walk with drift (we can also see this by examining the ***p-value***).
+
+What if we want to test the following unit root null hypothesis?
+$$\nabla X_t = a + bt + \alpha \nabla X_{t-1} + \epsilon_t,$$
+i.e. an ARIMA(1,1,0) process with linear trend.  In order to account for the first order autoregressive lag, we specify a `k=1` for the ADF test.
+```{r}
+adf.test(tsAvg, k=1)
+```
+We can still reject the null hypothesis of the unit root with 99% confidence.  But what if we keep adding lags?
+```{r}
+adf.test(tsAvg, k=2)
+```
+Still rejecting at 99% confidence.  How about three lags?
+```{r}
+adf.test(tsAvg, k=3)
+```
+Look at the p-value of 0.02405.  We can reject the unit root null hypothesis at 95% confidence but not 99% confidence.  And how about 4 lags (which corresponds to an ARIMA(4,1,0) process)?
+```{r}
+adf.test(tsAvg, k=4)
+```
+What is the default lag order for a time series of this length?
+```{r}
+adf.test(tsAvg)
+```
+At lag order 4, we can no longer reject the unit root null hypothesis, even at just the 90% confidence level.  What is going on here?  Is there really a unit root?
+
+Suppose we accept the null hypothesis, but that in reality the null hypothesis is false.  Then we fail to reject a false null hypothesis, which is called a ***Type II error***.  The ***power*** of a statistical test is the probability of rejecting a false null hypothesis (versus the ***confidence level*** which is the probability of accepting a true null hypothesis).
+
+Generally speaking, when we increase the lag `k` of the ADF test, the power of the test is reduced.  So we need to be aware of the increased possibility of accepting the null hypothesis that there is a unit root, when in fact there is no unit root.
+
+Let's explicitly calculate the regression that the lag 4 ADF test is performing.
+```{r}
+len = length(tsAvg)
+diffTS = diff(tsAvg)
+timeterm <- 1:(len-5)
+fit <- lm(formula = diffTS[5:(len-1)] ~ timeterm + tsAvg[5:(len-1)]
++ diffTS[4:(len-2)] + diffTS[3:(len-3)] + diffTS[2:(len-4)] + diffTS[1:(len-5)])
+summary(fit)
+```
+See the coefficient of -0.477517 against `tsAvg[5:(len-1)]`?  The null hypothesis is that this coefficient is zero (therefore unit root), and although the estimated coefficient of -0.4776517 would seem far enough away from zero, the $t$-value of -3.077 is not high enough to reject the null with 90% confidence.  This lack of sufficient power is a common problem with unit root tests.
+
+On the other hand, if we apply the ADF test to our random walk with two lags, we can almost (wrongly!) reject the unit root null hypothesis with 95% confidence.  This would be a ***Type I error***.
+```{r}
+adf.test(randomWalkNoDrift, k=2)
+```
+Unit root testing is tricky!  But I think our best guess is that our temperature series does **not** have a unit root, but this conclusion is subject to a lot of debate!
+
+REMARK - The `auto.arima` function in the `forecast` package also does an ADF test to conclude that the time series is not stationary, hence the time series is difference before fitting an ARMA(2,1) process on the differenced series, i.e. the original series is ARIMA(2,1,1).
+```{r}
+# P8
+auto.arima(tsAvg)
+```
+We could also change the `auto.arima` function to optimize for the Bayesian Information Criterion (BIC) rather than default AICc.  The BIC levies a harsher penalty on additional parameters, so it will tend to choose a more parsimonious model, in this case ARIMA(0,1,1) -- which is equivalent to a random walk plus noise model (local level model).
+```{r}
+auto.arima(tsAvg, ic="bic")
+```
+# KPSS test for stationarity
+The ***KPSS test*** complements the unit root tests:  The null hypothesis is that the time series is **stationary** (with or without a linear trend).
+
+We try this on our temperature series.
+```{r}
+kpss.test(tsAvg, null="Trend")
+```
+The KPSS rejects the null of stationarity.  Hmmm...what is going on here?
+
+**Caution**:  A rejection under the KPSS test of stationarity does may imply an ARIMA model with a unit root, but **other** sources of nonstationarity may trigger the rejection.
+
+**Example.** We create a series whose level jumps from 0 to 1.
+```{r}
+# P9
+jump = c(rep(0,50),rep(1,50))
+plot(jump, type="l")
+```
+
+Now we add Gaussian noise and the jump together.
+```{r}
+noisePlusJump = noise + jump
+plot(noisePlusJump, type="l")
+```
+
+Such a series is not stationary (because of the level jump), but does not have a unit root either.  Our ADF and KPSS tests are consistent with this.  Unit root nonstationarity is rejected by the Dickey-Fuller test:
+```{r}
+adf.test(noisePlusJump, k=0)
+```
+And stationarity is rejected by the KPSS test:
+```{r}
+kpss.test(noisePlusJump, null="Level")
+```
+
+### Box-Jenkins methodology
+
+(1)  ARIMA Model identification
+(1a) Differencing:  We can look at the ACF plot, and if the ACF plot decays quickly to zero, probably no differencing is necessary, but if the ACF plot decays slowly to zero, probably we should do some differencing.  We can also perform an ADF (and possibly KPSS) tests to determine if stationary, trend stationary, difference stationary or something else.
+(1b) Once we have arrived at a stationary time series (possibly by differencing or removing a deterministic trend), we choose an ARMA(p,q) model for the stationary time series.  For a pure MA(q) or AR(p), the order can be chosen using the ACF or PACF plot respectively.  Alternatively, in conjuction with a ***model fitting procedure*** (step 2), we can iterate over several possible models and use a model selection criterion such as the AIC to find the ARMA(p,q) model that fits best.
+
+(2)  Model fitting / estimation:  The ARIMA functions in R or Python use conditional sum of squares or maximum likelihood to fit parameters.
+
+(3)  Diagnostic checking:  At each step in time, we perform a ***one-step ahead*** forcast, which we'll call the ***fitted value***.  The differences between the observed values and the fitted values are the ***residuals***.  We would like the residuals to be close to zero and i.i.d., preferably Gaussian.
+
+We should look at a time plot, the histogram and the ACF plot of the residuals to look for outliers, cyclic patterns and other nonrandomness.  We can look at residual correlations one lag at a time and check their statistical significance.  We can also look at the residual correlations at all lags at once using a test such as the ***Ljung-Box*** statistic, although the null hypothesis of this test is that the residuals are uncorrelated, so it will usually identify only grossly inadequate models.
+
+We can also use the ***Durbin-Watson*** statistic which tests the residuals themselves, but it is quite similar to just examining the statistical signficance of the lag 1 correlation coefficient, so it doesn't help too much.
+
+(4) If our diagnostic checking turns up inadequacies, then we go back to step 1 and try alternative models.
+
+Please read sections 4.5, 4.6, 4.7, 4.9, 4.10 and 5.3 of the text for Chatfield's excellent discussion of the above!
+
+**Example.**  R's `auto.arima` function automatically performed model identification and fitting on our annual temperature data, but we still need to do diagnostic checking.  Let's plot the residuals first.
+```{r}
+# p10
+fit <- auto.arima(tsAvg)  # AICc is the default criterion.  AICc corrects for small sample sizes.
+plot(fit$residuals)
+```
+
+We can also look at the histogram to see that the distribution is somewhat skewed.
+```{r}
+hist(fit$residuals, breaks=20)
+```
+
+Also let's examine the ACF plot.  No signficant autocorrelations appear.
+```{r}
+acf(fit$residuals, main="")
+```
+
+We can double check by running a Ljung-Box test.  The null hypothesis is that the values are not correlated.  Since the p-value is way above 0.05, we don't reject the null.
+```{r}
+Box.test(fit$residuals, type="Ljung-Box")
+```
+
+### How about seasonality?
+What if we want to analyze the monthly data directly rather than the downsampled annual data?  Then we confront the feature of ***seasonality***.
+
+[TBD in class - more notes will follow]
+
+```{r}
+# P11
+acf(ex2020, main="")
+```
+
+
+```{r}
+decomposeTemps <- decompose(ex2020, type="additive")
+plot(decomposeTemps)
+# four level
+```
+
+We can also see the monthly averages used for the decomposition.
+```{r}
+# monthly data
+plot(decomposeTemps$figure)
+```
+
+```{r}
+fit <- auto.arima(ex2020)
+fit
+```
+```{r}
+plot(fit$residuals)
+```
+```{r}
+hist(fit$residuals, breaks=100)
+```
+```{r}
+acf(fit$residuals)
+```
+```{r}
+Box.test(fit$residuals, type="Ljung-Box")
+```
+

@@ -1,0 +1,47 @@
+---
+title: "S&P500 returns and dividends"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+### Get data from URL.
+We'll get S&P500 annual dividends (real not nominal).
+
+```{r}
+# bi-variant model
+MyData <- read.csv("Data/SP500_divs_closes_inflation_adj.csv")
+head(MyData)
+```
+```{r}
+# time series for close
+spot_ts <- ts(MyData$Close, start=1871, freq=1)
+spot_ts
+```
+```{r}
+# time series for dividend
+div_ts <- ts(MyData$Dividend, start=1871, freq=1)
+div_ts
+```
+```{r}
+# log transform
+logspot <- log(spot_ts)
+logdiv <- log(div_ts)
+# percentage changes
+spotChg <- diff(logspot)
+divChg <- diff(logdiv)
+divChg
+```
+
+```{r}
+# percentage change for two variables
+plot(spotChg)
+lines(divChg, col="red")
+```
+
+```{r}
+# cross correlation
+a = ccf(spotChg,divChg, main="")
+a
+```
+

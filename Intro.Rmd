@@ -1,0 +1,382 @@
+---
+title: "Analysis of the S&P 500 - Part 2"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+### R you ready?
+
+Last time we used a Jupyter Python notebook to analyze the daily log returns of the S&P 500 index.  This time we are going to try out using an "R Notebook" within RStudio.
+
+Let's first read in the S&P 500 data from our .csv file.
+```{r}
+MyData <- read.csv("Data/^GSPC.csv")
+```
+The `<-` operator is R's (leftward) assignment operator.  You can also use `=` for this purpose, but `<-` is considered the preferred style.
+
+What type of object is `MyData`?
+```{r}
+class(MyData)
+```
+
+A ***data frame*** is R's fundamental data structure.  It is a two-dimensional table with rows and columns.  Let's use the ```head()``` function to inspect the first few rows of our data frame.
+```{r}
+head(MyData)
+```
+
+How many rows and columns does our data frame have?
+```{r}
+dim(MyData)
+```
+
+We can access particular values of our table.
+```{r}
+MyData[1,2]
+```
+This is the value of the first row and second column.  We can also access it using the column header name.
+```{r}
+MyData[1,"Open"]
+```
+We can also access an entire row or column.
+```{r}
+MyData[10000,]
+```
+
+Let's access the entire "Close" column.
+```{r}
+MySeries = MyData$Close
+head(MySeries)
+```
+The object `MySeries` is a list (called a ***vector*** in R) of numeric values.  What kind of numeric values?
+```{r}
+typeof(MySeries)
+```
+
+
+### Don't lose the plot.
+
+We can plot `MySeries`.
+```{r}
+plot(MySeries)
+```
+
+Instead of plotting with lots of circles, let's switch to a line plot.
+```{r}
+plot(MySeries, type="l")
+```
+
+
+We perform a log transformation on our series.
+```{r}
+logSeries <- log(MySeries)
+plot(logSeries, type="l")
+```
+
+Now we take differences to get daily log returns.
+```{r}
+logDiff <- diff(logSeries)
+plot(logDiff, type="l")
+```
+
+We see that that we seem to have periods of relatively high and low volatility.  This suggests that while the daily returns have relatively low autocorrelation, we might see a more interesting autocorrelation structure for the **absolute value** of returns.
+
+```{r}
+absValues <- abs(logDiff)
+plot(absValues, type="l")
+```
+
+Let's plot the autocorrelation coefficients of our series of absolute values.  This is called an ***autocorrelation plot*** or a  ***correlogram***.
+
+```{r}
+# P1
+a = acf(absValues)
+a[1]
+```
+ 
+Let's increase the number of lags we are looking at.  Also, let's change the limits of the y-axis by passing the vector (0,0.30), which is R is specified by `c(0,0.30)`.  Finally, in my RStudio the title of the ACF plot is cropped off, so I will delete the `main` title.
+```{r}
+acf(absValues, lag.max=500, ylim=c(0,0.30), main="")
+```
+
+This is an interesting autocorrelation structure!  The autocorrelation coefficients look to be significant out to several hundred lags.  The coefficients are clearly decreasing with the time lag, perhaps exponentially.  So clearly the absolute values of returns (therefore the daily returns themselves) are not independent of each other.
+
+**This lack of independence distinguishes most time series analysis from traditional statistics!**
+
+### "The universe is information and we are stationary in it." -- Phillip K. Dick
+
+How might we model such a time series that is not i.i.d.?  Ideally we would like to be able to model the time series as a stochastic process in such a way that the statistical properties of the process remain constant over time; such a process is much easier to analyze than one whose statistical properities are changing.  We call such a process ***stationary***.
+
+**Definition.**  A stochastic process $X_t$ is said to be ***strictly stationary*** if the joint distribution of $X_{t_1}, X_{t_2}, \dots, X_{t_n}$ is equal to the joint distribution of $X_{t_1+\tau}, X_{t_2+\tau}, \dots, X_{t_n+\tau}$ for all $t_1, t_2, \dots, t_n$ and all shifts $\tau$.
+
+In particular, for $n=1$, we find that all $X_t$ are **identically distributed**.  For example, all the $X_t$ will have the same means and variances (if finite).  However, they are **not** necessarily independent.
+
+Also, for $n=2$, we find that the covariances (if finite) and correlations of $X_t$ and $X_{t+k}$ do not depend on the time $t$, so we have a well-defined autocovariance function $\gamma(k)$ and autocorrelation function $\rho(k)$:
+$$\gamma(k) = \gamma(t-k,t) = \operatorname{Cov}(X_t, X_{t-k}),$$
+$$\rho(k) = \frac{\gamma(k)}{\gamma(0)} = \frac{\operatorname{Cov}(X_t, X_{t-k})}{\operatorname{Var}(X_t)}$$
+
+It is often convenient to define a less strict notion of stationarity.
+
+**Definition.**  A stochastic process $X_t$ is said to be ***weakly stationary*** if its mean and variance are constant and its autocovariance depends only on the lag.
+
+A strictly stationary time series is also weakly stationary **if** the time series has finite means, variances and covariances.
+
+In most textbooks (including ours), "stationary" is taken to mean "weakly stationary".
+
+In practice, no observed time series data is truly stationary; rather we hope that a stationary time series process can sensibly model the characteristics the observed data.
+
+**Not an example.**  Consider the ***random walk process***
+$$X_t = X_{t-1} + \epsilon_t$$
+where $\epsilon_t$ is white noise, i.e. a purely random process with zero mean. Let $\sigma_{\epsilon}^2$ be the variance of $\epsilon_t$, and let $X_0 = 0$ be the initial condition at time 0.  Then $X_t$ will have zero mean for all $t \geq 0$.  However, the variance of $X_t$ will be
+$$t \sigma_{\epsilon}^2,$$
+which depends on $t$.  The **random walk process is not stationary**.
+
+**Example.**  Consider the process
+$$X_t = c + \beta_0 \epsilon_t + \beta_1 \epsilon_{t-1},$$
+where $\epsilon_t$ is white noise with zero mean and variance $\sigma_{\epsilon}^2$.  Such a process is called a ***moving average process of order 1*** (or an ***MA(1)*** process).  Then the mean of $X_t$ is constant $c$ and the variance is constant $\sigma_{\epsilon}^2 (\beta_0^2 + \beta_1^2)$.
+
+The lag 1 autocovariance is
+$$\begin{aligned}
+\operatorname{Cov}(X_t,X_{t-1}) &= \operatorname{Cov}(\beta_0 \epsilon_t + \beta_1 \epsilon_{t-1},\beta_0 \epsilon_{t-1} + \beta_1 \epsilon_{t-2})\\
+&= \beta_0 \beta_1 \sigma_{\epsilon}^2,
+\end{aligned}$$
+and the lag 1 autocorrelation is
+$$\frac{\beta_0 \beta_1}{\beta_0^2 + \beta_1^2}.$$
+For lag $k > 1$, the autocovariance and autocorrelation is zero.  Therefore an **MA(1) process is weakly stationary**.  In fact, an **MA(1) process is strictly stationary**.
+
+Since the correlation of an MA(1) process cuts off at lag 1, it is not a good model for our time series ``absValues``.
+
+**Example.**  Consider the process
+$$X_t = c + \alpha X_{t-1} + \epsilon_t,$$
+where $\epsilon_t$ is white noise with zero mean and variance $\sigma_{\epsilon}^2$.  Such a process is called an ***autoregressive process of order 1*** (or an ***AR(1)*** process, or a ***Markov process***).
+
+Let's suppose that we have an initial condition $X_s = x_s$ at some time $s$.  
+
+For $t \geq s$, we can rewrite $X_t$ as
+$$\begin{aligned}
+X_{t} &= c + \alpha X_{t-1} + \epsilon_t\\
+&= c + \alpha (c + \alpha X_{t-2} + \epsilon_{t-1}) + \epsilon_t\\
+&= c(1 + \alpha_1) + \alpha^2 X_{t-2} + \alpha \epsilon_{t-1} + \epsilon_t\\
+&= \cdots\\
+&= c(1 + \alpha + \cdots + \alpha^{t-s+1}) + \alpha^{t-s} X_s + \alpha^{t-s-1} \epsilon_{s+1} + \cdots + \epsilon_{t}.
+\end{aligned}$$
+
+Then the ***mean function*** $\mu_t$ is
+$$\mu_t = \mathbb{E}[X_t] = c(1 + \alpha + \cdots + \alpha^{t-s+1}) + \alpha^{t-s} x_s$$
+for $t \geq s$.  This mean function is not constant with respect to time $t$.  However, if $|\alpha_1| < 1$ and we let $s \rightarrow -\infty$, i.e. we assume that the time series starts an infinitely long time ago, then
+$$\mu_t = \frac{c}{1-\alpha},$$
+so that our mean function is constant.  In practice, since the mean is rapidly decaying to $c/(1-\alpha)$ with each time step, the mean becomes effectively constant after a relatively short period of time.
+
+The variance of $X_t$ is
+$$\operatorname{Var}(X_t) = \sigma_{\epsilon}^2(1 + \alpha^2 + \alpha^4 + \cdots \alpha^{2(t-s-1)})$$
+for $t > s$.  If again $|\alpha| < 1$ and $s \rightarrow -\infty$, then the variance is
+$$\begin{aligned}
+\operatorname{Var}(X_t) &= \sigma_{\epsilon}^2(1 + \alpha^2 + \alpha^4 + \cdots)\\
+&= \frac{\sigma_{\epsilon}^2}{1 - \alpha^2}
+\end{aligned}$$
+which is constant.
+
+If we assume $|\alpha| < 1$ and that the time series started a long time ago, we can rewrite our AR(1) process as
+$$X_t = \frac{c}{1-\alpha} + \epsilon_t + \alpha \epsilon_{t-1} + \alpha^2 \epsilon_{t-2} + \alpha^3 \epsilon_{t-3} + \cdots,$$
+which converges since $|\alpha| < 1$.
+
+The covariance between $X_t$ and $X_{t-k}$ is
+$$\begin{aligned}
+\gamma(t, t-k) &= \operatorname{Cov}(X_t, X_{t-k})\\
+&= \operatorname{Cov}\left(\sum_{i=0}^\infty \alpha^i \epsilon_{t-i}, \sum_{j=0}^\infty \alpha^j \epsilon_{t-k-j}\right)\\
+&= \sum_{i=0}^\infty \sum_{j=0}^\infty \alpha^{i+j} \operatorname{Cov}\left(\epsilon_{t-i}, \epsilon_{t-k-j}\right)\\
+&= \sum_{j=0}^\infty \alpha^{2j+k} \sigma_{\epsilon}^2\\
+&=\alpha^k \frac{\sigma_{\epsilon}^2}{1 - \alpha^2},
+\end{aligned}$$
+giving us an autocovariance function $\gamma(k)$ that depends only on lag $k$ but not on time $t$.  This also gives us an autocorrelation function (ACF)
+$$\rho(k) = \alpha^k$$
+for $k \geq 0$.
+
+In other words, we get an autocorrelation that decays exponentially to zero.  This might give us a useful model for the absolute value of S&P500 returns!
+
+### "Modeling is my number one priority - one hundred percent." -- Kendall Jenner
+
+Let's model `AbsValues` as AR(1) process
+$$X_t = c + \alpha X_{t-1} + \epsilon_t,$$
+There is a weakness in our model:  We know that `AbsValues` is always nonnegative, but our proposed model can not guarantee nonnegativity.  But let's proceed anyway. 
+Let's first estimate the mean $c/(1-\alpha)$ by taking the sample mean.
+```{r}
+mean(absValues)
+```
+
+To model `absValues` as an AR(1) process, we need to choose parameters $c$ and $\alpha$.  How might we do this?  Typically we would try to choose parameters to minimize some kind of error function, such as the ***conditional sum of squares***.  For estimating an autoregressive process, we can proceed as if we are doing ordinary linear regression (see pg. 82 of Chatfield and Xing).  Alternatively we could use other estimating approaches such as ***maximum likelihood***.
+
+Let's use R to estimate our parameters for us.
+```{r} 
+# P2
+arima(absValues, order=c(1,0,0))
+```
+
+R's `arima` function defaults to a maximum likelihood method to calculate the best fitting parameter, which is this case is $\alpha = 0.2463$.  Since the mean is 0.0065 (called the "intercept" by R), we can calulate $c$ as
+$$c = 0.0065 \times (1 - 0.2463) = 0.0049.$$
+We get a fitted ACF of
+$$\rho(k) = 0.2463^k.$$
+This gives **modeled** correlation coefficients for the first five lags as:
+```{r}
+0.2463^(1:5)
+```
+This compares to our **actual** sample correlation coefficients:
+```{r} 
+
+acf(absValues, plot=FALSE)$acf[2:6]
+```
+Oops!  Our model's lag-1 correlation coefficient $\alpha_1 = 0.2463$ matches exactly with the observed data, but since the subsequent correlation coefficients decay as $\alpha^k$, our subsequent correlation coefficients are **way too small**.  We need an alternative model which matches our lag-1 correlation coefficient but susequently decays much more slowly for subsequent lags!
+
+Let's consider more general moving average (MA) and autoregressive models (AR).
+
+**Definition.**  A ***moving average process of order q*** (or ***MA(q)*** process) is of the form
+$$X_t = c + \beta_0 \epsilon_t + \beta_1 \epsilon_{t-1} + \cdots + \beta_q \epsilon_{t-q},$$
+where $\epsilon_t$ is white noise with mean 0 and variance $\sigma_\epsilon^2$.
+
+Then $X_t$ is stationary (both strictly and weakly), with mean $c$ and variance
+$$\operatorname{Var}(X_t) = \sigma_\epsilon^2 (\beta_0^2 + \beta_1^2 + \cdots + \beta_q^2).$$
+
+The moving average process has an autocovariance function
+$$\gamma(k) = \begin{cases}
+\sigma_\epsilon^2(\beta_0 \beta_k + \beta_1 \beta_{k+1} + \cdots + \beta_{q-k} \beta_q) & \text{if } 0 \leq k \leq q, \\
+0 &  \text{if } k > q.\\
+\end{cases}$$
+Note that the covariance function cuts off to zero beyond lag $q$.  Similarly the autocorrelation function is
+$$\rho(k) = \begin{cases}
+\frac{\beta_0 \beta_k + \beta_1 \beta_{k+1} + \cdots + \beta_{q-k} \beta_q}{\beta_0^2 + \beta_1^2 + \cdots + \beta_q^2} & \text{if } 0 \leq k \leq q, \\
+0 &  \text{if } k > q.\\
+\end{cases}$$
+  
+Could we use an MA($q$) process to model our time series `absValues`?  We certainly could try, but it would seem to require an order $q$ on the order 300 or 400.  That is a lot of parameters to estimate!  We would risk overfitting.  It is better to try to find a more **parsimonious** model.  The ***Principle of Parsimony***:  We would like to have an adequate representation of the data with **as few parameters as possible**.
+
+Let's consider some other models.
+
+**Definition.**  An ***autoregressive process of order p*** (or ***AR(p)*** process) is of the form
+$$X_t = c + \alpha_1 X_{t-1} + \alpha_2 X_{t-2} + \cdots + \alpha_p X_{t-p} + \epsilon_t,$$
+where $\epsilon_t$ is white noise with mean 0 and variance $\sigma_\epsilon^2$.
+
+Before we discuss the properties of the AR($p$) model, let's first consider the question of choice of order $p$.  For the MA($q$) model, this was not too hard:  Just look at the sample ACF function and pick a lag beyond which the correlation is close to zero.  But trying to apply the ACF function to an AR model is tricky:  An AR(1) model has exponentially decreasing correlation coefficients, but higher order AR($p$) models can have various damped exponential and sinusoidal shapes.  We need another tool called the ***partial autocorrelation function*** (or ***PACF***.)  Essentially, the PACF removes the effect of autocorrelations arising from shorter lags.
+
+For example, consider an AR(1) model.  Then we have a lag-2 correlation coefficient $\rho(2)$ that arises purely from the lag-1 AR relationship, namely $\rho(2) = \rho(1)^2$.  What we would like is a lag-2 autocorrelation measurement that measures the excess correlation above or below $\rho(1)^2$.  That is what the PACF gives us.  For example, the lag-1 PACF coefficient is equal to the lag-1 ACF coefficient, but the lag-2 PAC coefficient is equal to
+$$\frac{\rho(2) - \rho(1)^2}{1 - \rho(1)^2},$$
+which is zero for an AR(1) model but nonzero for an AR(2) model with a nonzero second order coefficient $\alpha_2$.
+
+To choose an order $p$ for an AR model, we can look at the PACF function and pick a lag beyond which the PACF correlation coefficients go to approximately zero.
+
+Let's calculate the PACF for our series `AbsValues`.
+```{r}
+# P3
+acf(absValues, type="partial", lag.max=500, ylim=c(0,0.30), main="")
+```
+The PACF function is dropping to zero much more quickly than our ACF function!  Let's reduce the number of lags to 50 to see this better.
+```{r}
+acf(absValues, type="partial", lag.max=50, ylim=c(0,0.30), main="")
+```
+It looks like we can choose an order between 10 and 20 for the AR model, which is much better (=parsimonious) than an order of 300 to 400 for the MA model, but it is still a lot of parameters!
+
+We can combine the features of an MA and an AR model into a more general ***ARMA*** model.
+
+**Definition.**  An ***autoregressive moving average model of order (p,q)*** (or ***ARMA(p,q)***) is of the form
+$$X_t = c + \alpha_1 X_{t-1} + \cdots + \alpha_p X_{t-p} + \beta_0 \epsilon_t + \cdots + \beta_q \epsilon_{t-q}.$$
+
+**Example**.  An ARMA(1,1) model is of the form
+$$X_t = c + \alpha X_{t-1} + \beta_0 \epsilon_t + \beta_1 \epsilon_{t-1}.$$
+Typically we scale the white noise process $\epsilon_t$ so that $\beta_0 = 1$.
+$$X_t = c + \alpha X_{t-1} + \epsilon_t + \beta \epsilon_{t-1}.$$
+Let's assume that $|\alpha| < 1$, so that the process is **stationary**, and also that $|\beta| < 1$.  By assuming stationarity, we can use the following trick to calculate the variance of $X_t$.
+$$\begin{aligned}
+\gamma(0) &= \operatorname{Var}(X_t)\\
+&= \operatorname{Var}(c + \alpha X_{t-1} + \epsilon_t + \beta \epsilon_{t-1})\\
+&= \alpha^2 \operatorname{Var}(X_{t-1}) + \operatorname{Var}(\epsilon_t) + \beta^2 \operatorname{Var}(\epsilon_{t-1}) + 2 \alpha \beta \operatorname{Cov}(X_{t-1},\epsilon_{t-1})\\
+&= \alpha^2 \gamma(0) + \sigma_\epsilon^2 + \beta^2 \sigma_\epsilon^2 + 2 \alpha \beta \sigma_\epsilon^2\\
+&= \alpha^2 \gamma(0) + (1 + 2\alpha\beta + \beta^2) \sigma_\epsilon^2
+\end{aligned}$$
+We solve for $\gamma(0)$, i.e. the variance of $X_t$, to get
+$$\gamma(0) = \frac{1 + 2\alpha\beta + \beta^2}{1 - \alpha^2} \sigma_\epsilon^2$$
+
+Then we can calculate the lag-1 autocovariance as follows:
+$$\begin{aligned}
+\gamma(1) &= \operatorname{Cov}(X_t, X_{t-1})\\
+&= \operatorname{Cov}(c + \alpha X_{t-1} + \epsilon_t + \beta \epsilon_{t-1}, X_{t-1})\\
+&= \alpha \operatorname{Cov}(X_{t-1},X_{t-1}) + \operatorname{Cov}(X_{t-1},\epsilon_t) + \beta \operatorname{Cov}(X_{t-1},\epsilon_{t-1})\\
+&= \alpha \gamma(0) + 0 + \beta \sigma_\epsilon^2\\
+&= \alpha \frac{1 + 2\alpha\beta + \beta^2}{1 - \alpha^2} \sigma_\epsilon^2 +  \beta \sigma_\epsilon^2\\
+&= \frac{\alpha + \alpha^2\beta + \alpha\beta^2 + \beta}{1 - \alpha^2} \sigma_\epsilon^2\\
+&= \frac{(1 + \alpha \beta)(\alpha + \beta)}{1 - \alpha^2} \sigma_\epsilon^2.
+\end{aligned}$$
+Therefore the lag-1 autocorrelation coefficient is
+$$\rho(1) = \frac{\gamma(1)}{\gamma(0)} = \frac{(1 + \alpha \beta)(\alpha + \beta)}{1 + 2\alpha\beta + \beta^2}.$$
+
+For lag $k > 1$ we have autocovariance
+$$\begin{aligned}
+\gamma(k) &= \operatorname{Cov}(X_t, X_{t-k})\\
+&= \operatorname{Cov}(c + \alpha X_{t-1} + \beta_0 \epsilon_t + \beta_1 \epsilon_{t-1}, X_{t-k})\\
+&= \alpha \operatorname{Cov}(X_{t-1}, X_{t-k})\\
+&= \alpha \gamma(k-1).
+\end{aligned}$$
+Therefore we get an autocorrelation function
+$$\rho(k) = \frac{(1 + \alpha \beta)(\alpha + \beta)}{1 + 2\alpha\beta + \beta^2} \alpha^{k-1}$$
+for $k \geq 0$.
+
+Note that with this ACF we can fix both the lag-1 autocorrelation coefficient and the subsequent exponential decay rate $\alpha$ independently.  This looks like it could be quite useful for modeling our `absValues` data.  Let's use R to fit an ARMA(1,1) model to `absValues`.
+```{r}
+arima(absValues, order=c(1,0,1))
+```
+This looks promising!  Its ACF has fairly slow exponential decay rate of $\alpha = 0.9853$.  Note that if $\alpha$ is quite close to 1, which would gives us a non-stationary series, so we say that this time series is ***nearly non-stationary***.  Please see Chatfield and Xing pgs. 100-102 for an interesting discussion of this topic!
+
+We can calculate the lag-1 autocorrelation coefficient.
+```{r}
+(1 + 0.9853 * -0.9013)*(0.9853 - 0.9013)/(1 + 2 * 0.9853 * -0.9013 + 0.9013^2)
+```
+This is quite close to the sample lag-1 coeffient of 0.2463.  Let's try plotting the sample ACF versus the fitted ARMA(1,1) model's ACF.
+```{r}
+acf(absValues, lag.max=500, ylim=c(0,0.30), main="")
+lines(0.2595 * 0.9853^(1:500), type="l", col="red")
+# 1:500 is R syntax for a vector [1, 2, ..., 500]
+```
+This matches quite closely for the first fifty lags or so, but still decays too quickly for longer lags.  This suggests that we might want a model that has an ACF decaying at a polynomial rather than exponential rate; this leads to the topic of ***long-memory processes*** (see Chatfield and Xing pgs. 64-66).
+
+### A band of misfits.
+
+Let's now compare the fit and the execution time for MA($q$) models for various orders $q$.
+```{r}
+# P4
+start_time <- Sys.time()
+arima(absValues, order=c(0,0,1))  # MA(1)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(0,0,2))  # MA(2)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(0,0,4))  # MA(4)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(0,0,8))  # MA(8)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(0,0,16))  # MA(16)
+Sys.time() - start_time
+```
+The mean squared errors and log likelihood improve (as they must) as the order $q$ increases.  The AIC, which assesses a penalty for the number of parameters (see Chatfield and Xing pg. 98) is also improving.  However, since the computational times seems to be increasing by at least $O(q^3)$, it is not practical for us to keep increasing the order $q$.  Moreover, even at $q=16$, the goodness of fit of the MA model is still worse than the ARMA(1,1).
+
+Let's also compare the performance of the AR($p$) models for various orders $p$.
+```{r}
+start_time <- Sys.time()
+arima(absValues, order=c(1,0,0))  # AR(1)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(2,0,0))  # AR(2)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(4,0,0))  # AR(4)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(8,0,0))  # AR(8)
+Sys.time() - start_time
+start_time <- Sys.time()
+arima(absValues, order=c(16,0,0))  # AR(16)
+Sys.time() - start_time
+```
+The default fitting procedure  -- maximum likelihood -- seems to have similar execution times for both the AR and MA processes, but the AR model is outperforming in terms of fit.  Even so, the AR(16) process still does not improve upon the fit of the ARMA(1,1) model.  And a parsimonious model like ARMA(1,1) would likely have a further advantage when used out of sample.
+
+Caution!  ARMA(1,1) is still likely not a very good model of our time series.  First of all, ARMA(1,1) could generate negative values, whereas `AbsValues` must be nonnegative.  And to do ***model checking***, we really need to look at the ***residual values***, i.e. the difference between the observations and the fitted values (one-step ahead forecast).  See pages 108-110 of Chatfield and Xing for more info on this topic.
